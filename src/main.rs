@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{BufReader, Read};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 #[derive(Debug)]
@@ -9,7 +9,6 @@ pub enum Error {
     FieldRead(&'static str, std::io::Error),
     Bitness(u8),
     Endianness(u8),
-    Version(u8),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -35,6 +34,21 @@ pub enum Usize {
     U32(u32),
     U64(u64),
 }
+
+macro_rules! usize_into {
+    ($($ty:ty),+) => {
+        $(impl Into<$ty> for Usize {
+            fn into(self) -> $ty {
+                match self {
+                    Self::U32(x) => x as $ty,
+                    Self::U64(x) => x as $ty,
+                }
+            }
+        })*
+    }
+}
+
+usize_into!(u64, usize);
 
 #[derive(Debug, Clone, Copy)]
 pub enum Endianness {
@@ -102,6 +116,8 @@ fn read_usize<R: Read>(
     })
 }
 
+const LOADABLE_SEGMENT: u32 = 1;
+
 fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
     let mut reader = BufReader::new(File::open(path).map_err(Error::Io)?);
 
@@ -116,11 +132,7 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
     let endianness = read_byte(&mut reader, "endianness")?;
     let endianness = Endianness::try_from(endianness)?;
 
-    let version = read_byte(&mut reader, "version")?;
-    if version != 1 {
-        return Err(Error::Version(version));
-    }
-
+    let _ = read_byte(&mut reader, "version")?;
     let _ = read_byte(&mut reader, "abi")?;
     let _ = read_byte(&mut reader, "abi version")?;
     let _ = read_bytes::<_, 7>(&mut reader, "padding")?;
@@ -129,7 +141,6 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
     let _ = read_type!(&mut reader, u32, endianness, "ELF version")?;
 
     let entry = read_usize(&mut reader, bitness, endianness, "entry")?;
-
     let program_header_offset =
         read_usize(&mut reader, bitness, endianness, "program header offset")?;
 
@@ -137,7 +148,79 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
     let _ = read_type!(&mut reader, u32, endianness, "flags")?;
     let _ = read_type!(&mut reader, u16, endianness, "ELF header size")?;
     let _ = read_type!(&mut reader, u16, endianness, "program header entry size")?;
-    let _ = read_type!(&mut reader, u16, endianness, "program header entries")?;
+
+    let program_header_entries =
+        read_type!(&mut reader, u16, endianness, "program header entries")?;
+
+    reader
+        .seek(SeekFrom::Start(program_header_offset.into()))
+        .map_err(Error::Io)?;
+
+    let mut load = Vec::new();
+
+    for _ in 0..program_header_entries {
+        let segment_type = read_type!(&mut reader, u32, endianness, "segment type")?;
+
+        // only care about loadable segments
+        if segment_type != LOADABLE_SEGMENT {
+            continue;
+        }
+
+        let flags = if matches!(bitness, Bitness::Bits64) {
+            read_type!(&mut reader, u32, endianness, "segment flags for 64 bit")?
+        } else {
+            0
+        };
+
+        let offset = read_usize(&mut reader, bitness, endianness, "segment offset")?.into();
+        let virtual_address =
+            read_usize(&mut reader, bitness, endianness, "segment virtual address")?;
+        let _ = read_usize(&mut reader, bitness, endianness, "segment physcal address")?;
+        let file_size =
+            read_usize(&mut reader, bitness, endianness, "segment size in file")?.into();
+        let memory_size =
+            read_usize(&mut reader, bitness, endianness, "segment size in memory")?.into();
+
+        // only care about non zero sized segments
+        if memory_size == 0 {
+            continue;
+        }
+
+        let flags = if matches!(bitness, Bitness::Bits32) {
+            read_type!(&mut reader, u32, endianness, "segment flags for 32 bit")?
+        } else {
+            flags
+        };
+
+        let _ = read_usize(&mut reader, bitness, endianness, "segment alignment")?;
+
+        let data = if file_size > 0 {
+            // save current position in file
+            let stream_position = reader.stream_position().map_err(Error::Io)?;
+
+            // seek to segment data
+            reader.seek(SeekFrom::Start(offset)).map_err(Error::Io)?;
+
+            // read segment data
+            let mut data = vec![0; file_size];
+            reader.read_exact(&mut data).map_err(Error::Io)?;
+
+            // reset position in file
+            reader
+                .seek(SeekFrom::Start(stream_position))
+                .map_err(Error::Io)?;
+
+            data
+        } else {
+            vec![0; memory_size]
+        };
+
+        load.push((virtual_address, data));
+    }
+
+    for (addr, data) in load {
+        println!("{:#10x?} {:#x}", addr, data.len());
+    }
 
     Ok(())
 }
