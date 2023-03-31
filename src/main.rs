@@ -161,11 +161,6 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
     for _ in 0..program_header_entries {
         let segment_type = read_type!(&mut reader, u32, endianness, "segment type")?;
 
-        // only care about loadable segments
-        if segment_type != LOADABLE_SEGMENT {
-            continue;
-        }
-
         let flags = if matches!(bitness, Bitness::Bits64) {
             read_type!(&mut reader, u32, endianness, "segment flags for 64 bit")?
         } else {
@@ -193,6 +188,11 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
         };
 
         let _ = read_usize(&mut reader, bitness, endianness, "segment alignment")?;
+
+        // only care about loadable segments
+        if segment_type != LOADABLE_SEGMENT {
+            continue;
+        }
 
         let data = if file_size > 0 {
             // save current position in file
