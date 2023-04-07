@@ -1,3 +1,4 @@
+use std::arch::asm;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -9,6 +10,43 @@ pub enum Error {
     FieldRead(&'static str, std::io::Error),
     Bitness(u8),
     Endianness(u8),
+    Mprotect(i32),
+}
+
+mod ffi {
+    use std::os::raw::{c_int, c_void};
+
+    extern "C" {
+        pub fn mprotect(addr: *mut c_void, len: usize, prot: c_int) -> c_int;
+        pub fn getpagesize() -> c_int;
+    }
+
+    pub const PROT_NONE: c_int = 0;
+    pub const PROT_READ: c_int = 1;
+    pub const PROT_WRITE: c_int = 2;
+    pub const PROT_EXEC: c_int = 4;
+}
+
+fn mark_executable<T>(ptr: *mut T, len: usize) -> Result<(), Error> {
+    let res = unsafe {
+        let page_size = ffi::getpagesize() as usize;
+        let orig_addr = ptr as usize;
+
+        let masked_addr = orig_addr & !(page_size - 1);
+        let masked_ptr = masked_addr as _;
+        let masked_len = len + orig_addr - masked_addr;
+
+        ffi::mprotect(
+            masked_ptr,
+            masked_len,
+            ffi::PROT_READ | ffi::PROT_WRITE | ffi::PROT_EXEC,
+        )
+    };
+
+    match res {
+        0 => Ok(()),
+        err => Err(Error::Mprotect(err)),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -116,9 +154,15 @@ fn read_usize<R: Read>(
     })
 }
 
-const LOADABLE_SEGMENT: u32 = 1;
+pub struct Segment {
+    virtual_address: Usize,
+    data: Vec<u8>,
+    executable: bool,
+    writable: bool,
+    readable: bool,
+}
 
-fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
+pub fn read_elf(path: impl AsRef<Path>) -> Result<Vec<Segment>, Error> {
     let mut reader = BufReader::new(File::open(path).map_err(Error::Io)?);
 
     let magic = read_bytes::<_, 4>(&mut reader, "magic")?;
@@ -189,6 +233,8 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
 
         let _ = read_usize(&mut reader, bitness, endianness, "segment alignment")?;
 
+        const LOADABLE_SEGMENT: u32 = 1;
+
         // only care about loadable segments
         if segment_type != LOADABLE_SEGMENT {
             continue;
@@ -215,18 +261,43 @@ fn read_elf(path: impl AsRef<Path>) -> Result<(), Error> {
             vec![0; memory_size]
         };
 
-        load.push((virtual_address, data));
+        let (executable, writable, readable) =
+            (flags & 0b001 != 0, flags & 0b010 != 0, flags & 0b100 != 0);
+
+        load.push(Segment {
+            virtual_address,
+            data,
+            executable,
+            writable,
+            readable,
+        });
     }
 
-    for (addr, data) in load {
-        println!("{:#10x?} {:#x}", addr, data.len());
+    for segment in &load {
+        println!(
+            "{:#10x?} {:#x} exec: {} write: {} read: {}",
+            segment.virtual_address,
+            segment.data.len(),
+            segment.executable,
+            segment.writable,
+            segment.readable,
+        );
     }
 
-    Ok(())
+    Ok(load)
 }
 
 fn main() {
-    let path = std::env::args().nth(1).expect("excpected filename");
+    // let path = std::env::args().nth(1).expect("excpected filename");
+    let path = "samples/exit";
 
-    read_elf(path).unwrap();
+    let mut segments = read_elf(path).unwrap();
+
+    mark_executable(segments[1].data.as_mut_ptr(), segments[0].data.len()).unwrap();
+
+    unsafe {
+        let entry = segments[1].data.as_ptr();
+        let entry: fn() = std::mem::transmute(entry);
+        entry();
+    }
 }
