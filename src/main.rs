@@ -70,7 +70,7 @@ impl MMU {
             .segments
             .range(new.start..new.start + new.data.len())
             .next()
-            .and_then(|(_, s)| Some(s));
+            .map(|(_, s)| s);
 
         if inside.is_some() {
             return inside;
@@ -81,7 +81,7 @@ impl MMU {
 
     fn insert(&mut self, segment: Segment) -> Result<(), Error> {
         // ignore zero sized segments
-        if segment.data.len() == 0 {
+        if segment.data.is_empty() {
             return Ok(());
         }
 
@@ -285,7 +285,7 @@ mod tests {
                 start: 20,
                 protection: 0.into(),
                 data: vec![0; 10],
-            }
+            },
         ]
         .into_iter();
 
