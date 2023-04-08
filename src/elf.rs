@@ -117,62 +117,33 @@ fn read_usize<R: Read>(
     })
 }
 
-pub struct Protection(u32);
-
-impl Debug for Protection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut res = f.debug_tuple("Protection");
-
-        if self.0 == 0 {
-            res.field(&"None");
-        } else {
-            if self.read() {
-                res.field(&"R");
-            }
-
-            if self.write() {
-                res.field(&"W");
-            }
-
-            if self.execute() {
-                res.field(&"X");
-            }
-        }
-
-        res.finish()
-    }
+#[derive(Debug)]
+pub struct Protection {
+    pub r: bool,
+    pub w: bool,
+    pub x: bool,
 }
 
 impl From<u32> for Protection {
     fn from(value: u32) -> Self {
-        Protection(value & 0b111)
-    }
-}
-
-impl Protection {
-    pub fn execute(&self) -> bool {
-        self.0 & 0b001 != 0
-    }
-
-    pub fn write(&self) -> bool {
-        self.0 & 0b010 != 0
-    }
-
-    pub fn read(&self) -> bool {
-        self.0 & 0b100 != 0
+        Protection {
+            r: value & 0b100 != 0,
+            w: value & 0b010 != 0,
+            x: value & 0b001 != 0,
+        }
     }
 }
 
 pub struct Segment {
-    virtual_address: Usize,
-    protection: Protection,
-    data: Vec<u8>,
+    pub start: usize,
+    pub protection: Protection,
+    pub data: Vec<u8>,
 }
 
 impl Debug for Segment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Segment")
-            .field("virtual_address", &self.virtual_address)
+            .field("start", &self.start)
             .field("size", &self.data.len())
             .field("protection", &self.protection)
             .finish()
@@ -286,8 +257,10 @@ pub fn read_elf(path: impl AsRef<Path>) -> Result<Elf, Error> {
 
         let protection = Protection::from(flags);
 
+        let start = virtual_address.into();
+
         load.push(Segment {
-            virtual_address,
+            start,
             protection,
             data,
         });
