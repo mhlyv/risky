@@ -117,7 +117,7 @@ fn read_usize<R: Read>(
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub struct Protection {
     pub r: bool,
     pub w: bool,
@@ -130,6 +130,18 @@ impl From<u32> for Protection {
             r: value & 0b100 != 0,
             w: value & 0b010 != 0,
             x: value & 0b001 != 0,
+        }
+    }
+}
+
+impl std::ops::BitAnd for Protection {
+    type Output = Self;
+
+    fn bitand(self, rhs: Self) -> Self::Output {
+        Self {
+            r: self.r & rhs.r,
+            w: self.w & rhs.w,
+            x: self.x & rhs.x,
         }
     }
 }

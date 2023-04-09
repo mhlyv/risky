@@ -1,15 +1,28 @@
 mod elf;
 
-use elf::Segment;
+use elf::{Protection, Segment};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
-enum Error {
-    InsertOverlap { old: usize, new: usize },
+pub enum Error {
+    InsertOverlap {
+        old: usize,
+        new: usize,
+    },
+    SliceOutOfBounds {
+        addr: usize,
+        len: usize,
+    },
+    Protection {
+        addr: usize,
+        available: Protection,
+        required: Protection,
+    },
+    UnmappedAddress(usize),
 }
 
 #[derive(Debug, Default)]
-struct MMU {
+pub struct MMU {
     segments: BTreeMap<usize, Segment>,
 }
 
@@ -22,6 +35,63 @@ impl MMU {
         }
 
         Ok(mmu)
+    }
+
+    fn check_protection(
+        addr: usize,
+        available: Protection,
+        required: Protection,
+    ) -> Result<(), Error> {
+        if required & available == required {
+            Ok(())
+        } else {
+            Err(Error::Protection {
+                addr,
+                available,
+                required,
+            })
+        }
+    }
+
+    pub fn read(&self, addr: usize) -> Result<u8, Error> {
+        let segment = self.segment_including_address(addr)?;
+        let i = addr - segment.start;
+
+        Self::check_protection(
+            addr,
+            segment.protection,
+            Protection {
+                r: true,
+                w: false,
+                x: false,
+            },
+        )?;
+
+        Ok(segment.data[i])
+    }
+
+    pub fn read_slice(&self, addr: usize, buf: &mut [u8]) -> Result<(), Error> {
+        let segment = self.segment_including_address(addr)?;
+        let len = buf.len();
+        let i = addr - segment.start;
+
+        Self::check_protection(
+            addr,
+            segment.protection,
+            Protection {
+                r: true,
+                w: false,
+                x: false,
+            },
+        )?;
+
+        if addr + len > segment.start + segment.data.len() {
+            return Err(Error::SliceOutOfBounds { addr, len });
+        }
+
+        buf.copy_from_slice(&segment.data[i..i + len]);
+
+        Ok(())
     }
 
     fn get_overlapping(&self, new: &Segment) -> Option<&Segment> {
@@ -96,15 +166,19 @@ impl MMU {
         }
     }
 
-    fn segment_including_address(&self, addr: usize) -> Option<&Segment> {
-        self.segments.range(..=addr).last().and_then(|(_, last)| {
-            // check if the last segment in long enough
-            if addr >= last.start && addr < last.start + last.data.len() {
-                Some(last)
-            } else {
-                None
-            }
-        })
+    fn segment_including_address(&self, addr: usize) -> Result<&Segment, Error> {
+        self.segments
+            .range(..=addr)
+            .last()
+            .and_then(|(_, last)| {
+                // check if the last segment in long enough
+                if addr >= last.start && addr < last.start + last.data.len() {
+                    Some(last)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| Error::UnmappedAddress(addr))
     }
 }
 
@@ -130,17 +204,24 @@ mod tests {
 
         let mmu = MMU::try_from_iter(segments).unwrap();
 
-        println!("{:#?}", mmu);
-
-        assert!(mmu.segment_including_address(122).is_none());
+        assert!(matches!(
+            mmu.segment_including_address(122),
+            Err(Error::UnmappedAddress(..))
+        ));
         assert_eq!(mmu.segment_including_address(123).unwrap().start, 123);
         assert_eq!(mmu.segment_including_address(123 + 1).unwrap().start, 123);
         assert_eq!(mmu.segment_including_address(123 + 9).unwrap().start, 123);
-        assert!(mmu.segment_including_address(123 + 10).is_none());
+        assert!(matches!(
+            mmu.segment_including_address(123 + 10),
+            Err(Error::UnmappedAddress(..))
+        ));
         assert_eq!(mmu.segment_including_address(140).unwrap().start, 140);
         assert_eq!(mmu.segment_including_address(140 + 5).unwrap().start, 140);
         assert_eq!(mmu.segment_including_address(140 + 9).unwrap().start, 140);
-        assert!(mmu.segment_including_address(140 + 10).is_none());
+        assert!(matches!(
+            mmu.segment_including_address(140 + 10),
+            Err(Error::UnmappedAddress(..))
+        ));
     }
 
     #[test]
@@ -302,6 +383,109 @@ mod tests {
             Err(Error::InsertOverlap { old: _, new: _ })
         ));
     }
+
+    #[test]
+    fn read() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![111],
+        })
+        .unwrap();
+
+        assert_eq!(mmu.read(1234).unwrap(), 111);
+    }
+
+    #[test]
+    fn read_protection() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0.into(),
+            data: vec![111],
+        })
+        .unwrap();
+
+        assert!(matches!(mmu.read(1234), Err(Error::Protection { .. })));
+    }
+
+    #[test]
+    fn read_unmapped() {
+        let mmu = MMU::default();
+
+        assert!(matches!(mmu.read(1234), Err(Error::UnmappedAddress(..))));
+    }
+
+    #[test]
+    fn read_slice() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        let mut buf = [0; 3];
+
+        mmu.read_slice(1234 + 1, &mut buf).unwrap();
+
+        assert_eq!(buf, [2, 3, 4]);
+    }
+
+    #[test]
+    fn read_slice_protection() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        let mut buf = [0; 3];
+
+        assert!(matches!(
+            mmu.read_slice(1234 + 1, &mut buf),
+            Err(Error::Protection { .. })
+        ));
+    }
+
+    #[test]
+    fn read_slice_unmapped() {
+        let mmu = MMU::default();
+
+        let mut buf = [0; 3];
+
+        assert!(matches!(
+            mmu.read_slice(1234, &mut buf),
+            Err(Error::UnmappedAddress(..))
+        ));
+    }
+
+    #[test]
+    fn read_slice_oob() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        let mut buf = [0; 7];
+
+        assert!(matches!(
+            mmu.read_slice(1234, &mut buf),
+            Err(Error::SliceOutOfBounds { .. }),
+        ));
+    }
 }
 
 fn main() {
@@ -314,4 +498,8 @@ fn main() {
     let mmu = MMU::try_from_iter(segments).unwrap();
 
     println!("{:#?}", mmu);
+
+    let mut buf = [0; 4];
+    mmu.read_slice(elf.entry.into(), &mut buf).unwrap();
+    println!("{:x?}", buf);
 }
