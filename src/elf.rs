@@ -38,11 +38,11 @@ pub enum Usize {
 
 macro_rules! usize_into {
     ($($ty:ty),+) => {
-        $(impl Into<$ty> for Usize {
-            fn into(self) -> $ty {
-                match self {
-                    Self::U32(x) => x as $ty,
-                    Self::U64(x) => x as $ty,
+        $(impl From<Usize> for $ty {
+            fn from(val: Usize) -> $ty {
+                match val {
+                    Usize::U32(x) => x as $ty,
+                    Usize::U64(x) => x as $ty,
                 }
             }
         })*

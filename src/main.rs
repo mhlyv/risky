@@ -222,7 +222,7 @@ impl MMU {
                     None
                 }
             })
-            .ok_or_else(|| Error::UnmappedAddress(addr))
+            .ok_or(Error::UnmappedAddress(addr))
     }
 
     /// get the segment which the address is in
@@ -231,7 +231,7 @@ impl MMU {
         self.segments
             .get(&key)
             // could unwrap here maybe
-            .ok_or_else(|| Error::UnmappedAddress(addr))
+            .ok_or(Error::UnmappedAddress(addr))
     }
 
     /// get the segment which the address is in
@@ -240,7 +240,7 @@ impl MMU {
         self.segments
             .get_mut(&key)
             // could unwrap here maybe
-            .ok_or_else(|| Error::UnmappedAddress(addr))
+            .ok_or(Error::UnmappedAddress(addr))
     }
 }
 
