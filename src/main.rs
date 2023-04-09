@@ -54,7 +54,7 @@ impl MMU {
     }
 
     pub fn read(&self, addr: usize) -> Result<u8, Error> {
-        let segment = self.segment_including_address(addr)?;
+        let segment = self.get_segment(addr)?;
         let i = addr - segment.start;
 
         Self::check_protection(
@@ -71,7 +71,7 @@ impl MMU {
     }
 
     pub fn read_slice(&self, addr: usize, buf: &mut [u8]) -> Result<(), Error> {
-        let segment = self.segment_including_address(addr)?;
+        let segment = self.get_segment(addr)?;
         let len = buf.len();
         let i = addr - segment.start;
 
@@ -90,6 +90,49 @@ impl MMU {
         }
 
         buf.copy_from_slice(&segment.data[i..i + len]);
+
+        Ok(())
+    }
+
+    pub fn write(&mut self, addr: usize, val: u8) -> Result<(), Error> {
+        let segment = self.get_mut_segment(addr)?;
+        let i = addr - segment.start;
+
+        Self::check_protection(
+            addr,
+            segment.protection,
+            Protection {
+                r: false,
+                w: true,
+                x: false,
+            },
+        )?;
+
+        segment.data[i] = val;
+
+        Ok(())
+    }
+
+    pub fn write_slice(&mut self, addr: usize, buf: &[u8]) -> Result<(), Error> {
+        let segment = self.get_mut_segment(addr)?;
+        let len = buf.len();
+        let i = addr - segment.start;
+
+        Self::check_protection(
+            addr,
+            segment.protection,
+            Protection {
+                r: false,
+                w: true,
+                x: false,
+            },
+        )?;
+
+        if addr + len > segment.start + segment.data.len() {
+            return Err(Error::SliceOutOfBounds { addr, len });
+        }
+
+        segment.data[i..i + len].copy_from_slice(buf);
 
         Ok(())
     }
@@ -166,18 +209,37 @@ impl MMU {
         }
     }
 
-    fn segment_including_address(&self, addr: usize) -> Result<&Segment, Error> {
+    /// Get the key of the segment containing the address
+    fn get_segment_key(&self, addr: usize) -> Result<usize, Error> {
         self.segments
             .range(..=addr)
             .last()
-            .and_then(|(_, last)| {
+            .and_then(|(&key, last)| {
                 // check if the last segment in long enough
                 if addr >= last.start && addr < last.start + last.data.len() {
-                    Some(last)
+                    Some(key)
                 } else {
                     None
                 }
             })
+            .ok_or_else(|| Error::UnmappedAddress(addr))
+    }
+
+    /// get the segment which the address is in
+    fn get_segment(&self, addr: usize) -> Result<&Segment, Error> {
+        let key = self.get_segment_key(addr)?;
+        self.segments
+            .get(&key)
+            // could unwrap here maybe
+            .ok_or_else(|| Error::UnmappedAddress(addr))
+    }
+
+    /// get the segment which the address is in
+    fn get_mut_segment(&mut self, addr: usize) -> Result<&mut Segment, Error> {
+        let key = self.get_segment_key(addr)?;
+        self.segments
+            .get_mut(&key)
+            // could unwrap here maybe
             .ok_or_else(|| Error::UnmappedAddress(addr))
     }
 }
@@ -205,21 +267,21 @@ mod tests {
         let mmu = MMU::try_from_iter(segments).unwrap();
 
         assert!(matches!(
-            mmu.segment_including_address(122),
+            mmu.get_segment(122),
             Err(Error::UnmappedAddress(..))
         ));
-        assert_eq!(mmu.segment_including_address(123).unwrap().start, 123);
-        assert_eq!(mmu.segment_including_address(123 + 1).unwrap().start, 123);
-        assert_eq!(mmu.segment_including_address(123 + 9).unwrap().start, 123);
+        assert_eq!(mmu.get_segment(123).unwrap().start, 123);
+        assert_eq!(mmu.get_segment(123 + 1).unwrap().start, 123);
+        assert_eq!(mmu.get_segment(123 + 9).unwrap().start, 123);
         assert!(matches!(
-            mmu.segment_including_address(123 + 10),
+            mmu.get_segment(123 + 10),
             Err(Error::UnmappedAddress(..))
         ));
-        assert_eq!(mmu.segment_including_address(140).unwrap().start, 140);
-        assert_eq!(mmu.segment_including_address(140 + 5).unwrap().start, 140);
-        assert_eq!(mmu.segment_including_address(140 + 9).unwrap().start, 140);
+        assert_eq!(mmu.get_segment(140).unwrap().start, 140);
+        assert_eq!(mmu.get_segment(140 + 5).unwrap().start, 140);
+        assert_eq!(mmu.get_segment(140 + 9).unwrap().start, 140);
         assert!(matches!(
-            mmu.segment_including_address(140 + 10),
+            mmu.get_segment(140 + 10),
             Err(Error::UnmappedAddress(..))
         ));
     }
