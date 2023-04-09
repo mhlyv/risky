@@ -548,6 +548,127 @@ mod tests {
             Err(Error::SliceOutOfBounds { .. }),
         ));
     }
+
+    #[test]
+    fn write() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0],
+        })
+        .unwrap();
+
+        mmu.write(1234, 1).unwrap();
+        assert!(matches!(mmu.read(1234), Ok(1)));
+    }
+
+    #[test]
+    fn write_protection() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b100.into(),
+            data: vec![0],
+        })
+        .unwrap();
+
+        assert!(matches!(mmu.write(1234, 1), Err(Error::Protection { .. })));
+        assert!(matches!(mmu.read(1234), Ok(0)));
+    }
+
+    #[test]
+    fn write_unmapped() {
+        let mut mmu = MMU::default();
+
+        assert!(matches!(
+            mmu.write(1234, 1),
+            Err(Error::UnmappedAddress(..))
+        ));
+    }
+
+    #[test]
+    fn write_slice() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        let data = "asdasd".as_bytes();
+
+        mmu.write_slice(1234, data).unwrap();
+
+        let mut buf = [0; 6];
+        mmu.read_slice(1234, &mut buf).unwrap();
+
+        assert_eq!(buf, data);
+    }
+
+    #[test]
+    fn write_slice_protection() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b100.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        let data = "asdasd".as_bytes();
+
+        assert!(matches!(
+            mmu.write_slice(1234, data),
+            Err(Error::Protection { .. })
+        ));
+
+        let mut buf = [0; 6];
+        mmu.read_slice(1234, &mut buf).unwrap();
+
+        assert_eq!(buf, [0; 6]);
+    }
+
+    #[test]
+    fn write_slice_unmapped() {
+        let mut mmu = MMU::default();
+
+        let data = "asdasd".as_bytes();
+
+        assert!(matches!(
+            mmu.write_slice(1234, data),
+            Err(Error::UnmappedAddress { .. })
+        ));
+    }
+
+    #[test]
+    fn write_slice_oob() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        let data = &[1; 7];
+
+        assert!(matches!(
+            mmu.write_slice(1234, data),
+            Err(Error::SliceOutOfBounds { .. })
+        ));
+
+        let mut buf = [0; 6];
+        mmu.read_slice(1234, &mut buf).unwrap();
+
+        assert_eq!(buf, [0; 6]);
+    }
 }
 
 fn main() {
