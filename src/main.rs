@@ -1050,7 +1050,7 @@ mod tests {
 
 fn main() {
     // let path = std::env::args().nth(1).expect("excpected filename");
-    let path = "samples/exit";
+    let path = "samples/nostd/target/riscv64gc-unknown-linux-gnu/debug/nostd";
 
     let elf = elf::read_elf(path).unwrap();
 
