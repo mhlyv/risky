@@ -137,7 +137,7 @@ impl MMU {
         Ok(())
     }
 
-    /// get the keys of segments that would overlap the segment (new, len)
+    /// get the sorted keys of segments that would overlap the segment (new, len)
     fn get_overlapping(&self, new: usize, len: usize) -> Vec<usize> {
         // IMPORTANT
         // this assumes that there are no existing overlaps between segments
@@ -160,10 +160,17 @@ impl MMU {
         // |    new    |
         overlapping.extend(self.segments.range(remaining_range).map(|(&i, _)| i));
 
+        // make sure the results are sorted
+        debug_assert_eq!(overlapping, {
+            let mut clone = overlapping.clone();
+            clone.sort();
+            clone
+        });
+
         overlapping
     }
 
-    fn insert(&mut self, segment: Segment) -> Result<(), Error> {
+    pub fn insert(&mut self, segment: Segment) -> Result<(), Error> {
         // ignore zero sized segments
         if segment.data.is_empty() {
             return Ok(());
