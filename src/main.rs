@@ -210,7 +210,7 @@ impl MMU {
     }
 
     /// Get the key of the segment containing the address
-    fn get_segment_key(&self, addr: usize) -> Result<usize, Error> {
+    fn get_segment_key(&self, addr: usize) -> Option<usize> {
         self.segments
             .range(..=addr)
             .last()
@@ -222,24 +222,19 @@ impl MMU {
                     None
                 }
             })
-            .ok_or(Error::UnmappedAddress(addr))
     }
 
     /// get the segment which the address is in
     fn get_segment(&self, addr: usize) -> Result<&Segment, Error> {
-        let key = self.get_segment_key(addr)?;
-        self.segments
-            .get(&key)
-            // could unwrap here maybe
+        self.get_segment_key(addr)
+            .and_then(|key| self.segments.get(&key))
             .ok_or(Error::UnmappedAddress(addr))
     }
 
     /// get the segment which the address is in
     fn get_mut_segment(&mut self, addr: usize) -> Result<&mut Segment, Error> {
-        let key = self.get_segment_key(addr)?;
-        self.segments
-            .get_mut(&key)
-            // could unwrap here maybe
+        self.get_segment_key(addr)
+            .and_then(|key| self.segments.get_mut(&key))
             .ok_or(Error::UnmappedAddress(addr))
     }
 }
