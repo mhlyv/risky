@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 #[derive(Debug)]
 pub enum Error {
     InsertOverlap {
-        old: usize,
         new: usize,
+        overlapping: Vec<usize>,
     },
     SliceOutOfBounds {
         addr: usize,
@@ -137,59 +137,30 @@ impl MMU {
         Ok(())
     }
 
-    fn get_overlapping(&self, new: &Segment) -> Option<&Segment> {
-        // from left
+    /// get the keys of segments that would overlap the segment (new, len)
+    fn get_overlapping(&self, new: usize, len: usize) -> Vec<usize> {
+        // IMPORTANT
+        // this assumes that there are no existing overlaps between segments
+        // that can only happen if a segment wasn't mapped with the `insert` function
+
+        let mut overlapping = Vec::new();
+
+        // get the overlap from a previous segment
         // | old |
-        //     | new |
-        let left = self
-            .segments
-            .range(..=new.start)
-            .last()
-            .and_then(|(_, old)| {
-                if old.start + old.data.len() > new.start {
-                    Some(old)
-                } else {
-                    None
-                }
-            });
+        //   | new |
+        let remaining_range = if let Ok(segment) = self.get_segment(new) {
+            overlapping.push(segment.start);
+            segment.start + segment.data.len()..new + len
+        } else {
+            new..new + len
+        };
 
-        if left.is_some() {
-            return left;
-        }
+        // get the overlas from segments starting further
+        //   | old | | old |
+        // |    new    |
+        overlapping.extend(self.segments.range(remaining_range).map(|(&i, _)| i));
 
-        // from right
-        //     | old |
-        // | new |
-        let right = self
-            .segments
-            .range(new.start..)
-            .next()
-            .and_then(|(_, old)| {
-                if old.start < new.start + new.data.len() {
-                    Some(old)
-                } else {
-                    None
-                }
-            });
-
-        if right.is_some() {
-            return right;
-        }
-
-        // fully inside
-        //  | old |
-        // |  new  |
-        let inside = self
-            .segments
-            .range(new.start..new.start + new.data.len())
-            .next()
-            .map(|(_, s)| s);
-
-        if inside.is_some() {
-            return inside;
-        }
-
-        None
+        overlapping
     }
 
     fn insert(&mut self, segment: Segment) -> Result<(), Error> {
@@ -198,14 +169,16 @@ impl MMU {
             return Ok(());
         }
 
-        if let Some(overlapping) = self.get_overlapping(&segment) {
-            Err(Error::InsertOverlap {
-                old: overlapping.start,
-                new: segment.start,
-            })
-        } else {
+        let overlapping = self.get_overlapping(segment.start, segment.data.len());
+
+        if overlapping.is_empty() {
             self.segments.insert(segment.start, segment);
             Ok(())
+        } else {
+            Err(Error::InsertOverlap {
+                overlapping,
+                new: segment.start,
+            })
         }
     }
 
@@ -342,7 +315,7 @@ mod tests {
                 protection: 0.into(),
                 data: vec![0; 10],
             }),
-            Err(Error::InsertOverlap { old: 0, new: 9 })
+            Err(Error::InsertOverlap { .. })
         ));
     }
 
@@ -363,7 +336,7 @@ mod tests {
                 protection: 0.into(),
                 data: vec![0; 10],
             }),
-            Err(Error::InsertOverlap { old: 9, new: 0 })
+            Err(Error::InsertOverlap { .. })
         ));
     }
 
@@ -384,7 +357,7 @@ mod tests {
                 protection: 0.into(),
                 data: vec![0; 10],
             }),
-            Err(Error::InsertOverlap { old: 1, new: 0 })
+            Err(Error::InsertOverlap { .. })
         ));
     }
 
@@ -405,7 +378,7 @@ mod tests {
                 protection: 0.into(),
                 data: vec![0; 9],
             }),
-            Err(Error::InsertOverlap { old: 0, new: 1 })
+            Err(Error::InsertOverlap { .. })
         ));
     }
 
@@ -437,7 +410,7 @@ mod tests {
                 protection: 0.into(),
                 data: vec![0; 11],
             }),
-            Err(Error::InsertOverlap { old: _, new: _ })
+            Err(Error::InsertOverlap { .. })
         ));
     }
 
@@ -663,6 +636,95 @@ mod tests {
         mmu.read_slice(1234, &mut buf).unwrap();
 
         assert_eq!(buf, [0; 6]);
+    }
+
+    #[test]
+    fn no_overlaps() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        let overlapping = mmu.get_overlapping(0, 1234);
+
+        assert_eq!(overlapping.len(), 0);
+    }
+
+    #[test]
+    fn single_overlap() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        let overlapping = mmu.get_overlapping(0, 1235);
+        assert_eq!(overlapping.len(), 1);
+
+        let overlapping = mmu.get_overlapping(1234 + 6 - 1, 10);
+        assert_eq!(overlapping.len(), 1);
+    }
+
+    #[test]
+    fn multiple_overlap() {
+        let mut mmu = MMU::default();
+
+        let segments = vec![
+            Segment {
+                start: 10,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+            Segment {
+                start: 20,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+            Segment {
+                start: 30,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+        ]
+        .into_iter();
+
+        for segment in segments {
+            mmu.insert(segment).unwrap();
+        }
+
+        let overlapping = mmu.get_overlapping(12, 10);
+        assert_eq!(overlapping.len(), 2);
+
+        let overlapping = mmu.get_overlapping(0, 21);
+        assert_eq!(overlapping.len(), 2);
+
+        let overlapping = mmu.get_overlapping(22, 10);
+        assert_eq!(overlapping.len(), 2);
+
+        let overlapping = mmu.get_overlapping(19, 100);
+        assert_eq!(overlapping.len(), 2);
+
+        let overlapping = mmu.get_overlapping(20, 12);
+        assert_eq!(overlapping.len(), 2);
+
+        let overlapping = mmu.get_overlapping(0, 100);
+        assert_eq!(overlapping.len(), 3);
+
+        let overlapping = mmu.get_overlapping(10, 100);
+        assert_eq!(overlapping.len(), 3);
+
+        let overlapping = mmu.get_overlapping(12, 100);
+        assert_eq!(overlapping.len(), 3);
+
+        let overlapping = mmu.get_overlapping(12, 32 - 12 + 1);
+        assert_eq!(overlapping.len(), 3);
     }
 }
 
