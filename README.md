@@ -8,6 +8,6 @@
     - [x] insert segment
     - [x] read byte and slice
     - [x] write byte and slice
-    - [ ] unmap segment
+    - [x] unmap segment
 - [ ] emulation
     - [ ] ???
