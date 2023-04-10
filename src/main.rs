@@ -145,14 +145,23 @@ impl MMU {
 
         let mut overlapping = Vec::new();
 
+        let end = new + len;
+
         // get the overlap from a previous segment
         // | old |
         //   | new |
         let remaining_range = if let Ok(segment) = self.get_segment(new) {
             overlapping.push(segment.start);
-            segment.start + segment.data.len()..new + len
+            let segment_end = segment.start + segment.data.len();
+
+            // prevent a negative range
+            if segment_end < end {
+                segment_end..end
+            } else {
+                end..end
+            }
         } else {
-            new..new + len
+            new..end
         };
 
         // get the overlas from segments starting further
@@ -186,6 +195,88 @@ impl MMU {
                 overlapping,
                 new: segment.start,
             })
+        }
+    }
+
+    fn resize_or_unmap_or_split_segment(&mut self, key: usize, del_start: usize, del_len: usize) {
+        let segment = self.segments.get(&key).unwrap();
+        let (orig_start, orig_len) = (segment.start, segment.data.len());
+        let (del_end, orig_end) = (del_start + del_len, orig_start + orig_len);
+
+        if del_start <= orig_start && del_end >= orig_end {
+            // if there is a total overlap just remove the segment
+            self.segments.remove(&key);
+        } else if del_start <= orig_start || del_end >= orig_end {
+            // if there is an overlap remove, resize, then reinsert
+            let mut segment = self.segments.remove(&key).unwrap();
+
+            let (keep_range, new_start) = if orig_start < del_start {
+                // |   old   |
+                // | keep |  del  |
+                (0..del_start - orig_start, orig_start)
+            } else {
+                //    |    old    |
+                // | del |  keep  |
+                (del_end - orig_start..orig_len, del_end)
+            };
+
+            // keep slice of data
+            segment.data = segment.data.drain(keep_range).collect();
+
+            // set start
+            segment.start = new_start;
+
+            // it's safe to not use the `MMU::insert` function here, because the mappings
+            // didn't change since we unmapped the original one
+            self.segments.insert(segment.start, segment);
+        } else if del_start > orig_start && del_end < orig_end {
+            // if an inner slice needs to get unmapped: remove, split, reinsert
+            let segment = self.segments.remove(&key).unwrap();
+
+            let head = Segment {
+                start: segment.start,
+                protection: segment.protection,
+                data: Vec::from(&segment.data[0..del_start - orig_start]),
+            };
+
+            let tail = Segment {
+                start: del_end,
+                protection: segment.protection,
+                data: Vec::from(&segment.data[del_end - orig_start..]),
+            };
+
+            // it's safe to not use the `MMU::insert` function here, because the mappings
+            // didn't change since we unmapped the original one
+            self.segments.insert(head.start, head);
+            self.segments.insert(tail.start, tail);
+        }
+    }
+
+    /// unmap a region defined by (start, len)
+    pub fn unmap(&mut self, start: usize, len: usize) -> Result<(), Error> {
+        let overlapping = self.get_overlapping(start, len);
+
+        match overlapping.len() {
+            0 => Ok(()),
+            1 => {
+                self.resize_or_unmap_or_split_segment(overlapping[0], start, len);
+                Ok(())
+            }
+            _ => {
+                self.resize_or_unmap_or_split_segment(overlapping[0], start, len);
+                self.resize_or_unmap_or_split_segment(
+                    overlapping[overlapping.len() - 1],
+                    start,
+                    len,
+                );
+
+                // the segments between the last and first overlap get entirely unmapped
+                for key in &overlapping[1..overlapping.len() - 1] {
+                    self.segments.remove(key).unwrap();
+                }
+
+                Ok(())
+            }
         }
     }
 
@@ -732,6 +823,228 @@ mod tests {
 
         let overlapping = mmu.get_overlapping(12, 32 - 12 + 1);
         assert_eq!(overlapping.len(), 3);
+    }
+
+    #[test]
+    fn unmap_none() {
+        let mut mmu = MMU::default();
+        assert!(mmu.unmap(1234, 1234).is_ok());
+    }
+
+    #[test]
+    fn unmap_exact() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        assert!(mmu.unmap(1234, 6).is_ok());
+        assert_eq!(mmu.segments.len(), 0);
+    }
+
+    #[test]
+    fn unmap_overlap_whole() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![0; 6],
+        })
+        .unwrap();
+
+        assert!(mmu.unmap(0, 10000).is_ok());
+        assert_eq!(mmu.segments.len(), 0);
+    }
+
+    #[test]
+    fn unmap_head() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        assert!(mmu.unmap(0, 1234 + 5).is_ok());
+        assert_eq!(mmu.segments.len(), 1);
+        let (&key, segment) = mmu.segments.first_key_value().unwrap();
+        assert_eq!(key, 1234 + 5);
+        assert_eq!(segment.start, 1234 + 5);
+        assert_eq!(segment.data, &[6]);
+    }
+
+    #[test]
+    fn unmap_tail() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        assert!(mmu.unmap(1234 + 5, 1000).is_ok());
+        assert_eq!(mmu.segments.len(), 1);
+        let (&key, segment) = mmu.segments.first_key_value().unwrap();
+        assert_eq!(key, 1234);
+        assert_eq!(segment.start, 1234);
+        assert_eq!(segment.data, &[1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn unmap_inside() {
+        let mut mmu = MMU::default();
+
+        mmu.insert(Segment {
+            start: 1234,
+            protection: 0b111.into(),
+            data: vec![1, 2, 3, 4, 5, 6],
+        })
+        .unwrap();
+
+        assert!(mmu.unmap(1234 + 2, 2).is_ok());
+        assert_eq!(mmu.segments.len(), 2);
+        let mut it = mmu.segments.iter();
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 1234);
+        assert_eq!(segment.start, 1234);
+        assert_eq!(segment.data, &[1, 2]);
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 1234 + 4);
+        assert_eq!(segment.start, 1234 + 4);
+        assert_eq!(segment.data, &[5, 6]);
+    }
+
+    #[test]
+    fn unmap_multiple_exact() {
+        let mut mmu = MMU::default();
+
+        let segments = vec![
+            Segment {
+                start: 10,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+            Segment {
+                start: 20,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+            Segment {
+                start: 30,
+                protection: 0.into(),
+                data: vec![0; 3],
+            },
+        ]
+        .into_iter();
+
+        for segment in segments {
+            mmu.insert(segment).unwrap();
+        }
+
+        assert!(mmu.unmap(10, 23).is_ok());
+        assert_eq!(mmu.segments.len(), 0);
+    }
+
+    #[test]
+    fn unmap_multiple_head() {
+        let mut mmu = MMU::default();
+
+        let segments = vec![
+            Segment {
+                start: 10,
+                protection: 0.into(),
+                data: vec![1, 2, 3],
+            },
+            Segment {
+                start: 20,
+                protection: 0.into(),
+                data: vec![4, 5, 6],
+            },
+            Segment {
+                start: 30,
+                protection: 0.into(),
+                data: vec![7, 8, 9],
+            },
+        ]
+        .into_iter();
+
+        for segment in segments {
+            mmu.insert(segment).unwrap();
+        }
+
+        assert!(mmu.unmap(0, 22).is_ok());
+        assert_eq!(mmu.segments.len(), 2);
+
+        let mut it = mmu.segments.iter();
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 22);
+        assert_eq!(segment.start, 22);
+        assert_eq!(segment.data, &[6]);
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 30);
+        assert_eq!(segment.start, 30);
+        assert_eq!(segment.data, &[7, 8, 9]);
+    }
+
+    #[test]
+    fn unmap_multiple_tail() {
+        let mut mmu = MMU::default();
+
+        let segments = vec![
+            Segment {
+                start: 10,
+                protection: 0.into(),
+                data: vec![1, 2, 3],
+            },
+            Segment {
+                start: 20,
+                protection: 0.into(),
+                data: vec![4, 5, 6],
+            },
+            Segment {
+                start: 30,
+                protection: 0.into(),
+                data: vec![7, 8, 9],
+            },
+        ]
+        .into_iter();
+
+        for segment in segments {
+            mmu.insert(segment).unwrap();
+        }
+
+        assert!(mmu.unmap(0, 12).is_ok());
+        assert_eq!(mmu.segments.len(), 3);
+
+        let mut it = mmu.segments.iter();
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 12);
+        assert_eq!(segment.start, 12);
+        assert_eq!(segment.data, &[3]);
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 20);
+        assert_eq!(segment.start, 20);
+        assert_eq!(segment.data, &[4, 5, 6]);
+
+        let (&key, segment) = it.next().unwrap();
+        assert_eq!(key, 30);
+        assert_eq!(segment.start, 30);
+        assert_eq!(segment.data, &[7, 8, 9]);
     }
 }
 
