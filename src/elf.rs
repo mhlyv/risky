@@ -226,11 +226,6 @@ pub fn read_elf(path: impl AsRef<Path>) -> Result<Elf, Error> {
         let memory_size =
             read_usize(&mut reader, bitness, endianness, "segment size in memory")?.into();
 
-        // only care about non zero sized segments
-        if memory_size == 0 {
-            continue;
-        }
-
         let flags = if matches!(bitness, Bitness::Bits32) {
             read_type!(&mut reader, u32, endianness, "segment flags for 32 bit")?
         } else {
@@ -241,8 +236,8 @@ pub fn read_elf(path: impl AsRef<Path>) -> Result<Elf, Error> {
 
         const LOADABLE_SEGMENT: u32 = 1;
 
-        // only care about loadable segments
-        if segment_type != LOADABLE_SEGMENT {
+        // only care about non zero sized loadable segments
+        if segment_type != LOADABLE_SEGMENT || memory_size == 0 {
             continue;
         }
 
