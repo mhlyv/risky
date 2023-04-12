@@ -3,4 +3,4 @@ target = "riscv64gc-unknown-linux-gnu"
 
 [target.riscv64gc-unknown-linux-gnu]
 linker = "riscv64-linux-gnu-gcc"
-rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-nostartfiles"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-nostartfiles", "-C", "target-feature=-c"]
