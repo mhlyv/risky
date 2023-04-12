@@ -3,7 +3,7 @@
 ## TODO
 
 - [x] load elf file
-- [ ] virtual address mapping (MMU)
+- [ ] virtual address mapping
     - [x] protection modes
     - [x] insert segment
     - [x] read byte and slice

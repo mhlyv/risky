@@ -22,19 +22,19 @@ pub enum Error {
 }
 
 #[derive(Debug, Default)]
-pub struct MMU {
+pub struct VirtualMemory {
     segments: BTreeMap<usize, Segment>,
 }
 
-impl MMU {
+impl VirtualMemory {
     fn try_from_iter<T: IntoIterator<Item = Segment>>(iter: T) -> Result<Self, Error> {
-        let mut mmu = Self::default();
+        let mut vm = Self::default();
 
         for segment in iter {
-            mmu.insert(segment)?;
+            vm.insert(segment)?;
         }
 
-        Ok(mmu)
+        Ok(vm)
     }
 
     fn check_protection(
@@ -226,7 +226,7 @@ impl MMU {
             // set start
             segment.start = new_start;
 
-            // it's safe to not use the `MMU::insert` function here, because the mappings
+            // it's safe to not use the `vm::insert` function here, because the mappings
             // didn't change since we unmapped the original one
             self.segments.insert(segment.start, segment);
         } else if del_start > orig_start && del_end < orig_end {
@@ -245,7 +245,7 @@ impl MMU {
                 data: Vec::from(&segment.data[del_end - orig_start..]),
             };
 
-            // it's safe to not use the `MMU::insert` function here, because the mappings
+            // it's safe to not use the `vm::insert` function here, because the mappings
             // didn't change since we unmapped the original one
             self.segments.insert(head.start, head);
             self.segments.insert(tail.start, tail);
@@ -330,45 +330,45 @@ mod tests {
         ]
         .into_iter();
 
-        let mmu = MMU::try_from_iter(segments).unwrap();
+        let vm = VirtualMemory::try_from_iter(segments).unwrap();
 
         assert!(matches!(
-            mmu.get_segment(122),
+            vm.get_segment(122),
             Err(Error::UnmappedAddress(..))
         ));
-        assert_eq!(mmu.get_segment(123).unwrap().start, 123);
-        assert_eq!(mmu.get_segment(123 + 1).unwrap().start, 123);
-        assert_eq!(mmu.get_segment(123 + 9).unwrap().start, 123);
+        assert_eq!(vm.get_segment(123).unwrap().start, 123);
+        assert_eq!(vm.get_segment(123 + 1).unwrap().start, 123);
+        assert_eq!(vm.get_segment(123 + 9).unwrap().start, 123);
         assert!(matches!(
-            mmu.get_segment(123 + 10),
+            vm.get_segment(123 + 10),
             Err(Error::UnmappedAddress(..))
         ));
-        assert_eq!(mmu.get_segment(140).unwrap().start, 140);
-        assert_eq!(mmu.get_segment(140 + 5).unwrap().start, 140);
-        assert_eq!(mmu.get_segment(140 + 9).unwrap().start, 140);
+        assert_eq!(vm.get_segment(140).unwrap().start, 140);
+        assert_eq!(vm.get_segment(140 + 5).unwrap().start, 140);
+        assert_eq!(vm.get_segment(140 + 9).unwrap().start, 140);
         assert!(matches!(
-            mmu.get_segment(140 + 10),
+            vm.get_segment(140 + 10),
             Err(Error::UnmappedAddress(..))
         ));
     }
 
     #[test]
     fn insert_empty() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 0,
             protection: 0.into(),
             data: vec![],
         })
         .unwrap();
 
-        assert!(mmu.segments.is_empty());
+        assert!(vm.segments.is_empty());
     }
 
     #[test]
     fn insert() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -390,17 +390,17 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
-        assert_eq!(mmu.segments.len(), 3);
+        assert_eq!(vm.segments.len(), 3);
     }
 
     #[test]
     fn insert_overlap_left() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 0,
             protection: 0.into(),
             data: vec![0; 10],
@@ -408,7 +408,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            mmu.insert(Segment {
+            vm.insert(Segment {
                 start: 9,
                 protection: 0.into(),
                 data: vec![0; 10],
@@ -419,9 +419,9 @@ mod tests {
 
     #[test]
     fn insert_overlap_right() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 9,
             protection: 0.into(),
             data: vec![0; 10],
@@ -429,7 +429,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            mmu.insert(Segment {
+            vm.insert(Segment {
                 start: 0,
                 protection: 0.into(),
                 data: vec![0; 10],
@@ -440,9 +440,9 @@ mod tests {
 
     #[test]
     fn insert_overlap_inside() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1,
             protection: 0.into(),
             data: vec![0; 9],
@@ -450,7 +450,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            mmu.insert(Segment {
+            vm.insert(Segment {
                 start: 0,
                 protection: 0.into(),
                 data: vec![0; 10],
@@ -461,9 +461,9 @@ mod tests {
 
     #[test]
     fn insert_overlap_left_and_right() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 0,
             protection: 0.into(),
             data: vec![0; 10],
@@ -471,7 +471,7 @@ mod tests {
         .unwrap();
 
         assert!(matches!(
-            mmu.insert(Segment {
+            vm.insert(Segment {
                 start: 1,
                 protection: 0.into(),
                 data: vec![0; 9],
@@ -482,7 +482,7 @@ mod tests {
 
     #[test]
     fn insert_multi_left_and_right() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -499,11 +499,11 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
         assert!(matches!(
-            mmu.insert(Segment {
+            vm.insert(Segment {
                 start: 9,
                 protection: 0.into(),
                 data: vec![0; 11],
@@ -514,44 +514,44 @@ mod tests {
 
     #[test]
     fn read() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![111],
         })
         .unwrap();
 
-        assert_eq!(mmu.read(1234).unwrap(), 111);
+        assert_eq!(vm.read(1234).unwrap(), 111);
     }
 
     #[test]
     fn read_protection() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0.into(),
             data: vec![111],
         })
         .unwrap();
 
-        assert!(matches!(mmu.read(1234), Err(Error::Protection { .. })));
+        assert!(matches!(vm.read(1234), Err(Error::Protection { .. })));
     }
 
     #[test]
     fn read_unmapped() {
-        let mmu = MMU::default();
+        let vm = VirtualMemory::default();
 
-        assert!(matches!(mmu.read(1234), Err(Error::UnmappedAddress(..))));
+        assert!(matches!(vm.read(1234), Err(Error::UnmappedAddress(..))));
     }
 
     #[test]
     fn read_slice() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![1, 2, 3, 4, 5, 6],
@@ -560,16 +560,16 @@ mod tests {
 
         let mut buf = [0; 3];
 
-        mmu.read_slice(1234 + 1, &mut buf).unwrap();
+        vm.read_slice(1234 + 1, &mut buf).unwrap();
 
         assert_eq!(buf, [2, 3, 4]);
     }
 
     #[test]
     fn read_slice_protection() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0.into(),
             data: vec![1, 2, 3, 4, 5, 6],
@@ -579,28 +579,28 @@ mod tests {
         let mut buf = [0; 3];
 
         assert!(matches!(
-            mmu.read_slice(1234 + 1, &mut buf),
+            vm.read_slice(1234 + 1, &mut buf),
             Err(Error::Protection { .. })
         ));
     }
 
     #[test]
     fn read_slice_unmapped() {
-        let mmu = MMU::default();
+        let vm = VirtualMemory::default();
 
         let mut buf = [0; 3];
 
         assert!(matches!(
-            mmu.read_slice(1234, &mut buf),
+            vm.read_slice(1234, &mut buf),
             Err(Error::UnmappedAddress(..))
         ));
     }
 
     #[test]
     fn read_slice_oob() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![1, 2, 3, 4, 5, 6],
@@ -610,56 +610,53 @@ mod tests {
         let mut buf = [0; 7];
 
         assert!(matches!(
-            mmu.read_slice(1234, &mut buf),
+            vm.read_slice(1234, &mut buf),
             Err(Error::SliceOutOfBounds { .. }),
         ));
     }
 
     #[test]
     fn write() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0],
         })
         .unwrap();
 
-        mmu.write(1234, 1).unwrap();
-        assert!(matches!(mmu.read(1234), Ok(1)));
+        vm.write(1234, 1).unwrap();
+        assert!(matches!(vm.read(1234), Ok(1)));
     }
 
     #[test]
     fn write_protection() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b100.into(),
             data: vec![0],
         })
         .unwrap();
 
-        assert!(matches!(mmu.write(1234, 1), Err(Error::Protection { .. })));
-        assert!(matches!(mmu.read(1234), Ok(0)));
+        assert!(matches!(vm.write(1234, 1), Err(Error::Protection { .. })));
+        assert!(matches!(vm.read(1234), Ok(0)));
     }
 
     #[test]
     fn write_unmapped() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        assert!(matches!(
-            mmu.write(1234, 1),
-            Err(Error::UnmappedAddress(..))
-        ));
+        assert!(matches!(vm.write(1234, 1), Err(Error::UnmappedAddress(..))));
     }
 
     #[test]
     fn write_slice() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
@@ -668,19 +665,19 @@ mod tests {
 
         let data = "asdasd".as_bytes();
 
-        mmu.write_slice(1234, data).unwrap();
+        vm.write_slice(1234, data).unwrap();
 
         let mut buf = [0; 6];
-        mmu.read_slice(1234, &mut buf).unwrap();
+        vm.read_slice(1234, &mut buf).unwrap();
 
         assert_eq!(buf, data);
     }
 
     #[test]
     fn write_slice_protection() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b100.into(),
             data: vec![0; 6],
@@ -690,33 +687,33 @@ mod tests {
         let data = "asdasd".as_bytes();
 
         assert!(matches!(
-            mmu.write_slice(1234, data),
+            vm.write_slice(1234, data),
             Err(Error::Protection { .. })
         ));
 
         let mut buf = [0; 6];
-        mmu.read_slice(1234, &mut buf).unwrap();
+        vm.read_slice(1234, &mut buf).unwrap();
 
         assert_eq!(buf, [0; 6]);
     }
 
     #[test]
     fn write_slice_unmapped() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let data = "asdasd".as_bytes();
 
         assert!(matches!(
-            mmu.write_slice(1234, data),
+            vm.write_slice(1234, data),
             Err(Error::UnmappedAddress { .. })
         ));
     }
 
     #[test]
     fn write_slice_oob() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
@@ -726,53 +723,53 @@ mod tests {
         let data = &[1; 7];
 
         assert!(matches!(
-            mmu.write_slice(1234, data),
+            vm.write_slice(1234, data),
             Err(Error::SliceOutOfBounds { .. })
         ));
 
         let mut buf = [0; 6];
-        mmu.read_slice(1234, &mut buf).unwrap();
+        vm.read_slice(1234, &mut buf).unwrap();
 
         assert_eq!(buf, [0; 6]);
     }
 
     #[test]
     fn no_overlaps() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
         })
         .unwrap();
 
-        let overlapping = mmu.get_overlapping(0, 1234);
+        let overlapping = vm.get_overlapping(0, 1234);
 
         assert_eq!(overlapping.len(), 0);
     }
 
     #[test]
     fn single_overlap() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
         })
         .unwrap();
 
-        let overlapping = mmu.get_overlapping(0, 1235);
+        let overlapping = vm.get_overlapping(0, 1235);
         assert_eq!(overlapping.len(), 1);
 
-        let overlapping = mmu.get_overlapping(1234 + 6 - 1, 10);
+        let overlapping = vm.get_overlapping(1234 + 6 - 1, 10);
         assert_eq!(overlapping.len(), 1);
     }
 
     #[test]
     fn multiple_overlap() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -794,87 +791,87 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
-        let overlapping = mmu.get_overlapping(12, 10);
+        let overlapping = vm.get_overlapping(12, 10);
         assert_eq!(overlapping.len(), 2);
 
-        let overlapping = mmu.get_overlapping(0, 21);
+        let overlapping = vm.get_overlapping(0, 21);
         assert_eq!(overlapping.len(), 2);
 
-        let overlapping = mmu.get_overlapping(22, 10);
+        let overlapping = vm.get_overlapping(22, 10);
         assert_eq!(overlapping.len(), 2);
 
-        let overlapping = mmu.get_overlapping(19, 100);
+        let overlapping = vm.get_overlapping(19, 100);
         assert_eq!(overlapping.len(), 2);
 
-        let overlapping = mmu.get_overlapping(20, 12);
+        let overlapping = vm.get_overlapping(20, 12);
         assert_eq!(overlapping.len(), 2);
 
-        let overlapping = mmu.get_overlapping(0, 100);
+        let overlapping = vm.get_overlapping(0, 100);
         assert_eq!(overlapping.len(), 3);
 
-        let overlapping = mmu.get_overlapping(10, 100);
+        let overlapping = vm.get_overlapping(10, 100);
         assert_eq!(overlapping.len(), 3);
 
-        let overlapping = mmu.get_overlapping(12, 100);
+        let overlapping = vm.get_overlapping(12, 100);
         assert_eq!(overlapping.len(), 3);
 
-        let overlapping = mmu.get_overlapping(12, 32 - 12 + 1);
+        let overlapping = vm.get_overlapping(12, 32 - 12 + 1);
         assert_eq!(overlapping.len(), 3);
     }
 
     #[test]
     fn unmap_none() {
-        let mut mmu = MMU::default();
-        assert!(mmu.unmap(1234, 1234).is_ok());
+        let mut vm = VirtualMemory::default();
+        assert!(vm.unmap(1234, 1234).is_ok());
     }
 
     #[test]
     fn unmap_exact() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
         })
         .unwrap();
 
-        assert!(mmu.unmap(1234, 6).is_ok());
-        assert_eq!(mmu.segments.len(), 0);
+        assert!(vm.unmap(1234, 6).is_ok());
+        assert_eq!(vm.segments.len(), 0);
     }
 
     #[test]
     fn unmap_overlap_whole() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![0; 6],
         })
         .unwrap();
 
-        assert!(mmu.unmap(0, 10000).is_ok());
-        assert_eq!(mmu.segments.len(), 0);
+        assert!(vm.unmap(0, 10000).is_ok());
+        assert_eq!(vm.segments.len(), 0);
     }
 
     #[test]
     fn unmap_head() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![1, 2, 3, 4, 5, 6],
         })
         .unwrap();
 
-        assert!(mmu.unmap(0, 1234 + 5).is_ok());
-        assert_eq!(mmu.segments.len(), 1);
-        let (&key, segment) = mmu.segments.first_key_value().unwrap();
+        assert!(vm.unmap(0, 1234 + 5).is_ok());
+        assert_eq!(vm.segments.len(), 1);
+        let (&key, segment) = vm.segments.first_key_value().unwrap();
         assert_eq!(key, 1234 + 5);
         assert_eq!(segment.start, 1234 + 5);
         assert_eq!(segment.data, &[6]);
@@ -882,18 +879,18 @@ mod tests {
 
     #[test]
     fn unmap_tail() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![1, 2, 3, 4, 5, 6],
         })
         .unwrap();
 
-        assert!(mmu.unmap(1234 + 5, 1000).is_ok());
-        assert_eq!(mmu.segments.len(), 1);
-        let (&key, segment) = mmu.segments.first_key_value().unwrap();
+        assert!(vm.unmap(1234 + 5, 1000).is_ok());
+        assert_eq!(vm.segments.len(), 1);
+        let (&key, segment) = vm.segments.first_key_value().unwrap();
         assert_eq!(key, 1234);
         assert_eq!(segment.start, 1234);
         assert_eq!(segment.data, &[1, 2, 3, 4, 5]);
@@ -901,18 +898,18 @@ mod tests {
 
     #[test]
     fn unmap_inside() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
-        mmu.insert(Segment {
+        vm.insert(Segment {
             start: 1234,
             protection: 0b111.into(),
             data: vec![1, 2, 3, 4, 5, 6],
         })
         .unwrap();
 
-        assert!(mmu.unmap(1234 + 2, 2).is_ok());
-        assert_eq!(mmu.segments.len(), 2);
-        let mut it = mmu.segments.iter();
+        assert!(vm.unmap(1234 + 2, 2).is_ok());
+        assert_eq!(vm.segments.len(), 2);
+        let mut it = vm.segments.iter();
 
         let (&key, segment) = it.next().unwrap();
         assert_eq!(key, 1234);
@@ -927,7 +924,7 @@ mod tests {
 
     #[test]
     fn unmap_multiple_exact() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -949,16 +946,16 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
-        assert!(mmu.unmap(10, 23).is_ok());
-        assert_eq!(mmu.segments.len(), 0);
+        assert!(vm.unmap(10, 23).is_ok());
+        assert_eq!(vm.segments.len(), 0);
     }
 
     #[test]
     fn unmap_multiple_head() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -980,13 +977,13 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
-        assert!(mmu.unmap(0, 22).is_ok());
-        assert_eq!(mmu.segments.len(), 2);
+        assert!(vm.unmap(0, 22).is_ok());
+        assert_eq!(vm.segments.len(), 2);
 
-        let mut it = mmu.segments.iter();
+        let mut it = vm.segments.iter();
 
         let (&key, segment) = it.next().unwrap();
         assert_eq!(key, 22);
@@ -1001,7 +998,7 @@ mod tests {
 
     #[test]
     fn unmap_multiple_tail() {
-        let mut mmu = MMU::default();
+        let mut vm = VirtualMemory::default();
 
         let segments = vec![
             Segment {
@@ -1023,13 +1020,13 @@ mod tests {
         .into_iter();
 
         for segment in segments {
-            mmu.insert(segment).unwrap();
+            vm.insert(segment).unwrap();
         }
 
-        assert!(mmu.unmap(0, 12).is_ok());
-        assert_eq!(mmu.segments.len(), 3);
+        assert!(vm.unmap(0, 12).is_ok());
+        assert_eq!(vm.segments.len(), 3);
 
-        let mut it = mmu.segments.iter();
+        let mut it = vm.segments.iter();
 
         let (&key, segment) = it.next().unwrap();
         assert_eq!(key, 12);
@@ -1055,11 +1052,11 @@ fn main() {
     let elf = elf::read_elf(path).unwrap();
 
     let segments = elf.segments.into_iter();
-    let mmu = MMU::try_from_iter(segments).unwrap();
+    let vm = VirtualMemory::try_from_iter(segments).unwrap();
 
-    println!("{:#?}", mmu);
+    println!("{:#?}", vm);
 
     let mut buf = [0; 4];
-    mmu.read_slice(elf.entry.into(), &mut buf).unwrap();
+    vm.read_slice(elf.entry.into(), &mut buf).unwrap();
     println!("{:x?}", buf);
 }
